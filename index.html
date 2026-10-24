@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<!--
+	DuelPack — HTML-оболочка Godot 4.6 для Telegram Mini App.
+	Основа: стандартный godot.html из шаблона web_nothreads_release.zip (4.6.3).
+	Отличия:
+	  * грузит telegram-web-app.js ДО движка (window.Telegram.WebApp доступен из GDScript);
+	  * ready()/expand(), requestFullscreen() (Bot API 8.0+), disableVerticalSwipes() (7.7+),
+	    тёмные цвета шапки/фона, lockOrientation() (8.0+);
+	  * CSS-переменные safe area (--tg-safe-area-inset-*, --tg-content-safe-area-inset-*)
+	    используются для экрана загрузки; сама игра получает отступы через TgBridge.get_safe_area_px();
+	  * свой прогресс-бар, тёмный фон, без service worker/PWA (в Telegram не нужен);
+	  * сборка БЕЗ потоков: COOP/COEP-заголовки и SharedArrayBuffer не требуются.
+	Плейсхолдеры вида index.js / {"args":[],"canvasResizePolicy":0,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":6494048,"index.wasm":37700666},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4} подставляет экспортёр — не удалять.
+	ASSET_BASE (ниже) — опциональный внешний CDN для .wasm/.pck (см. deploy/README.md, Cloudflare + R2).
+-->
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+		<meta name="color-scheme" content="dark">
+		<meta name="theme-color" content="#05060d">
+		<title>DuelPack</title>
+		<!-- Официальный SDK Mini Apps. Должен идти до скриптов, которые обращаются к Telegram.WebApp. -->
+		<script src="https://telegram.org/js/telegram-web-app.js"></script>
+		<style>
+:root {
+	--app-bg: #05060d;
+	--app-fg: #e8ecff;
+	--app-accent: #5ad1ff;
+	--app-track: rgba(255, 255, 255, 0.12);
+	/* Отступы сверху/снизу = системная safe area + зона кнопок Telegram в fullscreen. */
+	--safe-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+	--safe-bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px));
+}
+
+html, body, #canvas {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+html, body {
+	width: 100%;
+	height: 100%;
+	background-color: var(--app-bg);
+	overscroll-behavior: none;
+}
+
+body {
+	color: var(--app-fg);
+	overflow: hidden;
+	touch-action: none;
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-tap-highlight-color: transparent;
+}
+
+#canvas {
+	display: block;
+	/* Канвас занимает экран МИНУС safe area (вырез, шапка Telegram в fullscreen),
+	   поэтому HUD игры не перекрывается. canvas_resize_policy=0: размер буфера
+	   канваса выставляет fitCanvas() ниже, а Godot подхватывает его сам. */
+	position: fixed;
+	left: 0;
+	right: 0;
+	top: var(--safe-top);
+	bottom: var(--safe-bottom);
+	width: 100%;
+	height: calc(100% - var(--safe-top) - var(--safe-bottom));
+}
+
+#canvas:focus {
+	outline: none;
+}
+
+#status {
+	position: fixed;
+	inset: 0;
+	padding-top: var(--safe-top);
+	padding-bottom: var(--safe-bottom);
+	box-sizing: border-box;
+	background-color: var(--app-bg);
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	gap: 28px;
+	visibility: hidden;
+	z-index: 2;
+	transition: opacity 0.25s ease-out;
+}
+
+#status.fade {
+	opacity: 0;
+}
+
+#status-splash {
+	max-width: min(60vw, 360px);
+	max-height: 40vh;
+	object-fit: contain;
+}
+
+#status-splash.show-image--false {
+	display: none;
+}
+
+#status-splash.use-filter--false {
+	image-rendering: pixelated;
+}
+
+#status-progress {
+	display: none;
+	width: min(70vw, 420px);
+	height: 8px;
+	border-radius: 4px;
+	background: var(--app-track);
+	overflow: hidden;
+}
+
+#status-progress-fill {
+	height: 100%;
+	width: 0%;
+	border-radius: 4px;
+	background: var(--app-accent);
+	transition: width 0.15s linear;
+}
+
+/* Неизвестный размер — «бегущая» полоска. */
+#status-progress.indeterminate #status-progress-fill {
+	width: 30%;
+	animation: slide 1.1s ease-in-out infinite;
+}
+
+@keyframes slide {
+	0% { transform: translateX(-100%); }
+	100% { transform: translateX(340%); }
+}
+
+#status-label {
+	display: none;
+	font: 500 14px/1.2 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	color: rgba(232, 236, 255, 0.7);
+	letter-spacing: 0.04em;
+}
+
+#status-notice {
+	display: none;
+	max-width: 80vw;
+	background-color: #3a1f2a;
+	border-radius: 12px;
+	border: 1px solid #9b3943;
+	color: #f0e0e4;
+	font: 14px/1.35 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	padding: 16px;
+	text-align: center;
+}
+		</style>
+		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
+<link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
+
+	</head>
+	<body>
+		<canvas id="canvas">
+			Your browser does not support the canvas tag.
+		</canvas>
+
+		<noscript>
+			Your browser does not support JavaScript.
+		</noscript>
+
+		<div id="status">
+			<img id="status-splash" class="show-image--true fullsize--true use-filter--true" src="index.png" alt="">
+			<div id="status-progress"><div id="status-progress-fill"></div></div>
+			<div id="status-label"></div>
+			<div id="status-notice"></div>
+		</div>
+
+		<script>
+// --- Telegram: инициализация окна как можно раньше (до загрузки движка) ---
+(function () {
+	const tg = window.Telegram && window.Telegram.WebApp;
+	if (!tg || !tg.initData) {
+		return; // открыто в обычном браузере — просто веб-версия
+	}
+	const atLeast = (v) => typeof tg.isVersionAtLeast === 'function' && tg.isVersionAtLeast(v);
+	try {
+		tg.ready();   // убрать нативный лоадер Telegram, показать наш прогресс-бар
+		tg.expand();  // развернуть bottom sheet на всю высоту
+		if (atLeast('6.1')) {
+			tg.setHeaderColor('#05060d');
+			tg.setBackgroundColor('#05060d');
+		}
+		if (atLeast('7.10')) {
+			tg.setBottomBarColor('#05060d');
+		}
+		if (atLeast('7.7')) {
+			tg.disableVerticalSwipes(); // свайп вниз по доске не должен закрывать игру
+		}
+		// Fullscreen только на мобильных: на десктопе он разворачивает окно на весь монитор.
+		const mobile = tg.platform === 'android' || tg.platform === 'ios';
+		if (mobile && atLeast('8.0')) {
+			tg.requestFullscreen();
+			tg.lockOrientation(); // игра портретная 1080×1920
+		}
+		// Подтверждение закрытия во время партии можно включать из GDScript:
+		// JavaScriptBridge.eval("Telegram.WebApp.enableClosingConfirmation()")
+	} catch (e) {
+		console.warn('Telegram WebApp init failed:', e);
+	}
+}());
+		</script>
+
+		<script>
+// --- Размер буфера канваса = его CSS-размер × devicePixelRatio ---
+// При canvas_resize_policy=0 Godot каждый кадр сверяет canvas.width/height и
+// подстраивает окно, а ввод пересчитывает по getBoundingClientRect() — поэтому
+// смещённый на safe area канвас работает без правок в игре.
+(function () {
+	const canvas = document.getElementById('canvas');
+	function fitCanvas() {
+		const r = canvas.getBoundingClientRect();
+		const dpr = window.devicePixelRatio || 1;
+		const w = Math.max(1, Math.round(r.width * dpr));
+		const h = Math.max(1, Math.round(r.height * dpr));
+		if (canvas.width !== w || canvas.height !== h) {
+			canvas.width = w;
+			canvas.height = h;
+		}
+	}
+	fitCanvas();
+	window.addEventListener('resize', fitCanvas);
+	const tg = window.Telegram && window.Telegram.WebApp;
+	if (tg && typeof tg.onEvent === 'function') {
+		// CSS-переменные --tg-*-inset-* обновляются по этим событиям — пересчитать после них.
+		['viewportChanged', 'safeAreaChanged', 'contentSafeAreaChanged', 'fullscreenChanged']
+			.forEach((e) => tg.onEvent(e, () => requestAnimationFrame(fitCanvas)));
+	}
+}());
+		</script>
+
+		<script src="index.js"></script>
+		<script>
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":0,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":6494048,"index.wasm":37700666},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_THREADS_ENABLED = false;
+
+// Внешний хост для тяжёлых файлов (index.wasm ~38 МБ, index.pck, аудио-ворклеты).
+// Пусто — всё грузится рядом с index.html. Пример: 'https://cdn.example.com/duelpack/'
+// (со слешем в конце; на хосте нужен CORS: Access-Control-Allow-Origin = домен игры).
+// Нужен, например, на Cloudflare Pages: там лимит 25 МиБ на файл.
+const ASSET_BASE = '';
+if (ASSET_BASE) {
+	const exe = GODOT_CONFIG['executable'];
+	GODOT_CONFIG['mainPack'] = ASSET_BASE + exe + '.pck';
+	GODOT_CONFIG['executable'] = ASSET_BASE + exe;
+	// fileSizes привязаны к локальным именам → прогресс станет «бегущим», это нормально.
+}
+
+const engine = new Engine(GODOT_CONFIG);
+
+(function () {
+	const statusOverlay = document.getElementById('status');
+	const statusProgress = document.getElementById('status-progress');
+	const statusFill = document.getElementById('status-progress-fill');
+	const statusLabel = document.getElementById('status-label');
+	const statusNotice = document.getElementById('status-notice');
+
+	let initializing = true;
+	let statusMode = '';
+
+	function setStatusMode(mode) {
+		if (statusMode === mode || !initializing) {
+			return;
+		}
+		if (mode === 'hidden') {
+			initializing = false;
+			statusOverlay.classList.add('fade');
+			setTimeout(() => statusOverlay.remove(), 260);
+			return;
+		}
+		statusOverlay.style.visibility = 'visible';
+		const showProgress = mode === 'progress';
+		statusProgress.style.display = showProgress ? 'block' : 'none';
+		statusLabel.style.display = showProgress ? 'block' : 'none';
+		statusNotice.style.display = mode === 'notice' ? 'block' : 'none';
+		statusMode = mode;
+	}
+
+	function setStatusNotice(text) {
+		while (statusNotice.lastChild) {
+			statusNotice.removeChild(statusNotice.lastChild);
+		}
+		text.split('\n').forEach((line) => {
+			statusNotice.appendChild(document.createTextNode(line));
+			statusNotice.appendChild(document.createElement('br'));
+		});
+	}
+
+	function displayFailureNotice(err) {
+		console.error(err);
+		if (err instanceof Error) {
+			setStatusNotice(err.message);
+		} else if (typeof err === 'string') {
+			setStatusNotice(err);
+		} else {
+			setStatusNotice('An unknown error occurred.');
+		}
+		setStatusMode('notice');
+		initializing = false;
+	}
+
+	function formatMb(bytes) {
+		return (bytes / (1024 * 1024)).toFixed(1);
+	}
+
+	const missing = Engine.getMissingFeatures({
+		threads: GODOT_THREADS_ENABLED,
+	});
+
+	if (missing.length !== 0) {
+		// Для Telegram экспортируем без потоков — сюда попадём только на очень старых WebView.
+		let msg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+		if (GODOT_THREADS_ENABLED) {
+			msg += '\n(This build uses threads. Re-export with variant/thread_support=false for Telegram.)\n';
+		}
+		displayFailureNotice(msg + missing.join('\n'));
+		return;
+	}
+
+	setStatusMode('progress');
+	engine.startGame({
+		'onProgress': function (current, total) {
+			if (current > 0 && total > 0) {
+				statusProgress.classList.remove('indeterminate');
+				statusFill.style.width = Math.min(100, (current / total) * 100).toFixed(1) + '%';
+				statusLabel.textContent = formatMb(current) + ' / ' + formatMb(total) + ' MB';
+			} else {
+				statusProgress.classList.add('indeterminate');
+				statusLabel.textContent = current > 0 ? formatMb(current) + ' MB' : 'Loading…';
+			}
+		},
+	}).then(() => {
+		setStatusMode('hidden');
+	}, displayFailureNotice);
+}());
+		</script>
+	</body>
+</html>
+
