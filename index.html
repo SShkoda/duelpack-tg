@@ -10,7 +10,7 @@
 	    используются для экрана загрузки; сама игра получает отступы через TgBridge.get_safe_area_px();
 	  * свой прогресс-бар, тёмный фон, без service worker/PWA (в Telegram не нужен);
 	  * сборка БЕЗ потоков: COOP/COEP-заголовки и SharedArrayBuffer не требуются.
-	Плейсхолдеры вида index.js / {"args":[],"canvasResizePolicy":0,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":6998968,"index.wasm":37700666},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4} подставляет экспортёр — не удалять.
+	Плейсхолдеры вида index.js / {"args":[],"canvasResizePolicy":0,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":7000648,"index.wasm":37700666},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4} подставляет экспортёр — не удалять.
 	ASSET_BASE (ниже) — опциональный внешний CDN для .wasm/.pck (см. deploy/README.md, Cloudflare + R2).
 -->
 <html lang="en">
@@ -263,7 +263,7 @@ body {
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":0,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":6998968,"index.wasm":37700666},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":0,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":7000648,"index.wasm":37700666},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 const GODOT_THREADS_ENABLED = false;
 
 // Внешний хост для тяжёлых файлов (index.wasm ~38 МБ, index.pck, аудио-ворклеты).
